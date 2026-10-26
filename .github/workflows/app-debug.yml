@@ -1,0 +1,73 @@
+name: Build tv2u-image tools APK
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    tags: ['v*']
+  pull_request:
+    branches: [main, master]
+permissions:
+  contents: read
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: .build/project
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract source ZIP and copy app version
+        working-directory: .
+        run: python3 prepare-source.py
+      - name: Verify TV2U Editor R9 source layout
+        run: python3 scripts/verify_layout.py
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
+      - name: Install Android SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+      - name: Configure optional private signing key
+        if: github.event_name != 'pull_request'
+        env:
+          KEY_DATA: ${{ secrets.TV2U_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.TV2U_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.TV2U_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.TV2U_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$KEY_DATA" ]; then
+            test -n "$STORE_PASSWORD" && test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD"
+            printf '%s' "$KEY_DATA" | base64 --decode > "$RUNNER_TEMP/tv2u-private.jks"
+            {
+              echo "TV2U_KEYSTORE=$RUNNER_TEMP/tv2u-private.jks"
+              echo "TV2U_STORE_PASSWORD=$STORE_PASSWORD"
+              echo "TV2U_KEY_ALIAS=$KEY_ALIAS"
+              echo "TV2U_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> "$GITHUB_ENV"
+          fi
+      - name: Test, lint and build release APK
+        run: gradle --no-daemon testDebugUnitTest lintRelease assembleRelease
+      - name: Prepare versioned APK
+        run: python3 scripts/package_apk.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tv2u-image-tools-TV2U-EDITOR-R9-APK
+          path: .build/project/dist/*
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-reports
+          path: .build/project/app/build/reports/
+          if-no-files-found: ignore
